@@ -1,0 +1,1362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Study Planner</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="app-container">
+        <div class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <h1 class="sidebar-title">Study Planner</h1>
+                <div class="nav-tabs">
+                    <button class="nav-tab active" id="homeTab" onclick="showHome()">Home</button>
+                    <button class="nav-tab" id="plannerTab" onclick="showPlanner()">Planner</button>
+                    <button class="nav-tab" id="historyTab" onclick="showHistory()">History</button>
+                </div>
+                <button class="add-folder-btn" id="addFolderBtn" onclick="addFolder()" style="display: none;">+ Add Subject</button>
+            </div>
+            <div class="folders-list" id="foldersList">
+                <!-- Folders will be dynamically added here -->
+            </div>
+        </div>
+
+        <div class="main-content">
+            <div class="main-header">
+                <h2 class="main-title" id="mainTitle">Daily Progress</h2>
+                <p class="main-subtitle" id="mainSubtitle">Track your daily study goals</p>
+                <div class="header-controls" id="headerControls" style="display: none;">
+                    <button class="edit-file-btn" id="editFileBtn" onclick="editFileName()" title="Edit file name">✎</button>
+                    <button class="duplicate-file-btn" id="duplicateFileBtn" onclick="duplicateFile()" title="Duplicate file">📋</button>
+                </div>
+            </div>
+            <div class="content-area" id="contentArea">
+                <!-- Content will be dynamically loaded here -->
+            </div>
+        </div>
+    </div>
+
+    <div class="save-indicator" id="saveIndicator">Auto-saved!</div>
+
+    <!-- Mobile menu toggle button -->
+    <button class="mobile-menu-toggle" id="mobileMenuToggle" onclick="toggleMobileMenu()" style="display: none;">
+        ☰
+    </button>
+
+    <!-- Context menu -->
+    <div class="context-menu" id="contextMenu" style="display: none;">
+        <div class="context-menu-item" onclick="contextEdit()">Edit</div>
+        <div class="context-menu-item" onclick="contextDuplicate()">Duplicate</div>
+        <div class="context-menu-item" onclick="contextDelete()">Delete</div>
+    </div>
+
+    <script>
+        // Global state
+        let studyData = {
+            folders: {},
+            currentFile: null,
+            dailyProgress: {},
+            currentView: 'home',
+            startDate: null,
+            subjectProgress: {},
+            completedToday: {},
+            removedFromHome: {},
+            settings: {
+                autoSaveInterval: 5000,
+                theme: 'light',
+                language: 'en'
+            }
+        };
+
+        let autoSaveInterval;
+        let isDataChanged = false;
+        let contextMenuTarget = null;
+
+        // Enhanced localStorage functions
+        function loadData() {
+            try {
+                const savedData = localStorage.getItem('studyPlannerData');
+                if (savedData) {
+                    const parsedData = JSON.parse(savedData);
+                    studyData = {
+                        folders: parsedData.folders || {},
+                        currentFile: parsedData.currentFile || null,
+                        dailyProgress: parsedData.dailyProgress || {},
+                        currentView: parsedData.currentView || 'home',
+                        startDate: parsedData.startDate || getCurrentDateString(),
+                        subjectProgress: parsedData.subjectProgress || {},
+                        completedToday: parsedData.completedToday || {},
+                        removedFromHome: parsedData.removedFromHome || {},
+                        settings: {
+                            autoSaveInterval: 5000,
+                            theme: 'light',
+                            language: 'en',
+                            ...parsedData.settings
+                        }
+                    };
+                    
+                    // Initialize missing subject progress
+                    Object.keys(studyData.folders).forEach(folderId => {
+                        if (!studyData.subjectProgress[folderId]) {
+                            studyData.subjectProgress[folderId] = {
+                                currentDay: 1,
+                                pendingDays: [],
+                                completedDays: [],
+                                lastCompletedDate: null
+                            };
+                        }
+                    });
+                    
+                    // Initialize today's data
+                    const today = getCurrentDateString();
+                    if (!studyData.completedToday[today]) {
+                        studyData.completedToday[today] = {};
+                    }
+                    if (!studyData.removedFromHome[today]) {
+                        studyData.removedFromHome[today] = {};
+                    }
+                } else {
+                    // Initialize new data
+                    initializeNewData();
+                }
+            } catch (e) {
+                console.error('Error loading data:', e);
+                initializeNewData();
+            }
+            renderCurrentView();
+        }
+
+        function initializeNewData() {
+            studyData = {
+                folders: {},
+                currentFile: null,
+                dailyProgress: {},
+                currentView: 'home',
+                startDate: getCurrentDateString(),
+                subjectProgress: {},
+                completedToday: { [getCurrentDateString()]: {} },
+                removedFromHome: { [getCurrentDateString()]: {} },
+                settings: {
+                    autoSaveInterval: 5000,
+                    theme: 'light',
+                    language: 'en'
+                }
+            };
+        }
+
+        function saveData() {
+            try {
+                localStorage.setItem('studyPlannerData', JSON.stringify(studyData));
+                showSaveIndicator();
+                isDataChanged = false;
+            } catch (e) {
+                console.error('Error saving data:', e);
+                const indicator = document.getElementById('saveIndicator');
+                indicator.textContent = 'Save failed! Storage quota exceeded.';
+                indicator.style.background = '#dc2626';
+                indicator.classList.add('show');
+                setTimeout(() => {
+                    indicator.classList.remove('show');
+                    indicator.textContent = 'Auto-saved!';
+                    indicator.style.background = '#10b981';
+                }, 3000);
+            }
+        }
+
+        function clearAllData() {
+            if (confirm('Are you sure you want to clear all data? This cannot be undone!')) {
+                if (confirm('This will delete ALL subjects, files, and progress. Are you absolutely sure?')) {
+                    localStorage.removeItem('studyPlannerData');
+                    initializeNewData();
+                    renderCurrentView();
+                    showSaveIndicator('All data cleared!');
+                }
+            }
+        }
+
+        function showSaveIndicator(message = 'Auto-saved!') {
+            const indicator = document.getElementById('saveIndicator');
+            indicator.textContent = message;
+            indicator.classList.add('show');
+            setTimeout(() => {
+                indicator.classList.remove('show');
+            }, 2000);
+        }
+
+        function markDataChanged() {
+            isDataChanged = true;
+        }
+
+        function startAutoSave() {
+            if (autoSaveInterval) {
+                clearInterval(autoSaveInterval);
+            }
+            autoSaveInterval = setInterval(() => {
+                if (isDataChanged) {
+                    saveData();
+                }
+            }, studyData.settings.autoSaveInterval);
+        }
+
+        function getCurrentDateString() {
+            const today = new Date();
+            return today.toISOString().split('T')[0];
+        }
+
+        function getFormattedDate(dateString) {
+            const date = new Date(dateString);
+            return date.toLocaleDateString('en-US', { 
+                weekday: 'long', 
+                year: 'numeric', 
+                month: 'long', 
+                day: 'numeric' 
+            });
+        }
+
+        function getDaysSinceStart() {
+            const start = new Date(studyData.startDate);
+            const today = new Date(getCurrentDateString());
+            const diffTime = today - start;
+            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+            return Math.max(1, diffDays + 1);
+        }
+
+        // Enhanced navigation functions
+        function showHome() {
+            studyData.currentView = 'home';
+            updateNavTabs('homeTab');
+            document.getElementById('addFolderBtn').style.display = 'none';
+            document.getElementById('headerControls').style.display = 'none';
+            document.getElementById('foldersList').innerHTML = '';
+            
+            document.getElementById('mainTitle').textContent = 'Daily Progress';
+            document.getElementById('mainSubtitle').textContent = 'Track your daily study goals';
+            
+            renderHomepage();
+        }
+
+        function showPlanner() {
+            studyData.currentView = 'planner';
+            updateNavTabs('plannerTab');
+            document.getElementById('addFolderBtn').style.display = 'block';
+            
+            renderFolders();
+            if (studyData.currentFile) {
+                renderFileContent();
+            } else {
+                showEmptyState();
+            }
+        }
+
+        function showHistory() {
+            studyData.currentView = 'history';
+            updateNavTabs('historyTab');
+            document.getElementById('addFolderBtn').style.display = 'none';
+            document.getElementById('headerControls').style.display = 'none';
+            document.getElementById('foldersList').innerHTML = '';
+            
+            document.getElementById('mainTitle').textContent = 'Study History';
+            document.getElementById('mainSubtitle').textContent = 'Review your progress over time';
+            
+            renderHistoryPage();
+        }
+
+        function updateNavTabs(activeTabId) {
+            ['homeTab', 'plannerTab', 'historyTab'].forEach(tabId => {
+                document.getElementById(tabId).classList.remove('active');
+            });
+            document.getElementById(activeTabId).classList.add('active');
+        }
+
+        function renderCurrentView() {
+            if (studyData.currentView === 'home') {
+                showHome();
+            } else if (studyData.currentView === 'history') {
+                showHistory();
+            } else {
+                showPlanner();
+            }
+        }
+
+        // Enhanced folder management
+        function addFolder() {
+            const folderName = prompt('Enter subject name:');
+            if (folderName && folderName.trim()) {
+                const folderId = 'folder_' + Date.now();
+                studyData.folders[folderId] = {
+                    name: folderName.trim(),
+                    files: {},
+                    expanded: false,
+                    createdDate: getCurrentDateString(),
+                    color: getRandomColor()
+                };
+                
+                studyData.subjectProgress[folderId] = {
+                    currentDay: 1,
+                    pendingDays: [],
+                    completedDays: [],
+                    lastCompletedDate: null
+                };
+                
+                markDataChanged();
+                saveData();
+                renderFolders();
+            }
+        }
+
+        function editFolderName(folderId, event) {
+            event.stopPropagation();
+            const currentName = studyData.folders[folderId].name;
+            const newName = prompt('Edit subject name:', currentName);
+            if (newName && newName.trim() && newName.trim() !== currentName) {
+                studyData.folders[folderId].name = newName.trim();
+                markDataChanged();
+                saveData();
+                renderFolders();
+                if (studyData.currentFile && studyData.currentFile.startsWith(folderId)) {
+                    renderFileContent();
+                }
+            }
+        }
+
+        function duplicateFolder(folderId, event) {
+            event.stopPropagation();
+            const folder = studyData.folders[folderId];
+            const newFolderId = 'folder_' + Date.now();
+            const newName = prompt('Enter name for duplicated subject:', folder.name + ' (Copy)');
+            
+            if (newName && newName.trim()) {
+                studyData.folders[newFolderId] = {
+                    ...JSON.parse(JSON.stringify(folder)),
+                    name: newName.trim(),
+                    createdDate: getCurrentDateString()
+                };
+                
+                // Duplicate files with new IDs
+                const newFiles = {};
+                Object.keys(folder.files).forEach(oldFileId => {
+                    const newFileId = newFolderId + '_file_' + Date.now() + Math.random();
+                    newFiles[newFileId] = JSON.parse(JSON.stringify(folder.files[oldFileId]));
+                });
+                studyData.folders[newFolderId].files = newFiles;
+                
+                studyData.subjectProgress[newFolderId] = {
+                    currentDay: 1,
+                    pendingDays: [],
+                    completedDays: [],
+                    lastCompletedDate: null
+                };
+                
+                markDataChanged();
+                saveData();
+                renderFolders();
+            }
+        }
+
+        function deleteFolder(folderId, event) {
+            event.stopPropagation();
+            const folderName = studyData.folders[folderId].name;
+            if (confirm(`Are you sure you want to delete "${folderName}" and all its files? This cannot be undone.`)) {
+                delete studyData.folders[folderId];
+                delete studyData.subjectProgress[folderId];
+                
+                // Clean up daily progress
+                Object.keys(studyData.dailyProgress).forEach(date => {
+                    if (studyData.dailyProgress[date][folderId]) {
+                        delete studyData.dailyProgress[date][folderId];
+                    }
+                });
+                
+                if (studyData.currentFile && studyData.currentFile.startsWith(folderId)) {
+                    studyData.currentFile = null;
+                    showEmptyState();
+                }
+                markDataChanged();
+                saveData();
+                renderFolders();
+            }
+        }
+
+        function toggleFolder(folderId) {
+            studyData.folders[folderId].expanded = !studyData.folders[folderId].expanded;
+            renderFolders();
+        }
+
+        // Enhanced file management
+        function addFile(folderId) {
+            const fileName = prompt('Enter file name:');
+            if (fileName && fileName.trim()) {
+                const fileId = folderId + '_file_' + Date.now();
+                studyData.folders[folderId].files[fileId] = {
+                    name: fileName.trim(),
+                    todos: [],
+                    done: [],
+                    createdDate: getCurrentDateString(),
+                    lastModified: getCurrentDateString(),
+                    tags: []
+                };
+                markDataChanged();
+                saveData();
+                renderFolders();
+            }
+        }
+
+        function editFileName() {
+            if (!studyData.currentFile) return;
+            
+            const file = getFileById(studyData.currentFile);
+            if (!file) return;
+            
+            const newName = prompt('Edit file name:', file.name);
+            if (newName && newName.trim() && newName.trim() !== file.name) {
+                file.name = newName.trim();
+                file.lastModified = getCurrentDateString();
+                markDataChanged();
+                saveData();
+                renderFolders();
+                renderFileContent();
+            }
+        }
+
+        function duplicateFile() {
+            if (!studyData.currentFile) return;
+            
+            const file = getFileById(studyData.currentFile);
+            const folderId = getFolderIdByFileId(studyData.currentFile);
+            if (!file || !folderId) return;
+            
+            const newName = prompt('Enter name for duplicated file:', file.name + ' (Copy)');
+            if (newName && newName.trim()) {
+                const newFileId = folderId + '_file_' + Date.now();
+                studyData.folders[folderId].files[newFileId] = {
+                    ...JSON.parse(JSON.stringify(file)),
+                    name: newName.trim(),
+                    createdDate: getCurrentDateString(),
+                    lastModified: getCurrentDateString()
+                };
+                markDataChanged();
+                saveData();
+                renderFolders();
+            }
+        }
+
+        function deleteFile(folderId, fileId, event) {
+            event.stopPropagation();
+            const fileName = studyData.folders[folderId].files[fileId].name;
+            if (confirm(`Are you sure you want to delete "${fileName}"?`)) {
+                delete studyData.folders[folderId].files[fileId];
+                if (studyData.currentFile === fileId) {
+                    studyData.currentFile = null;
+                    showEmptyState();
+                }
+                markDataChanged();
+                saveData();
+                renderFolders();
+            }
+        }
+
+        function selectFile(fileId) {
+            studyData.currentFile = fileId;
+            document.getElementById('headerControls').style.display = 'flex';
+            renderFolders();
+            renderFileContent();
+        }
+
+        function getFolderIdByFileId(fileId) {
+            for (let folderId in studyData.folders) {
+                if (studyData.folders[folderId].files[fileId]) {
+                    return folderId;
+                }
+            }
+            return null;
+        }
+
+        function getRandomColor() {
+            const colors = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#06b6d4', '#84cc16'];
+            return colors[Math.floor(Math.random() * colors.length)];
+        }
+
+        // Enhanced task management with context menus
+        function showContextMenu(event, type, index) {
+            event.preventDefault();
+            const contextMenu = document.getElementById('contextMenu');
+            contextMenu.style.display = 'block';
+            contextMenu.style.left = event.pageX + 'px';
+            contextMenu.style.top = event.pageY + 'px';
+            
+            contextMenuTarget = { type, index };
+        }
+
+        function hideContextMenu() {
+            document.getElementById('contextMenu').style.display = 'none';
+            contextMenuTarget = null;
+        }
+
+        function contextEdit() {
+            if (contextMenuTarget) {
+                editTask(contextMenuTarget.index, contextMenuTarget.type);
+            }
+            hideContextMenu();
+        }
+
+        function contextDuplicate() {
+            if (contextMenuTarget) {
+                duplicateTask(contextMenuTarget.index, contextMenuTarget.type);
+            }
+            hideContextMenu();
+        }
+
+        function contextDelete() {
+            if (contextMenuTarget) {
+                deleteTask(contextMenuTarget.index, contextMenuTarget.type);
+            }
+            hideContextMenu();
+        }
+
+        function duplicateTask(index, type) {
+            const file = getFileById(studyData.currentFile);
+            if (!file) return;
+            
+            const task = type === 'todo' ? file.todos[index] : file.done[index];
+            const duplicatedTask = task + ' (Copy)';
+            
+            if (type === 'todo') {
+                file.todos.splice(index + 1, 0, duplicatedTask);
+            } else {
+                file.done.splice(index + 1, 0, duplicatedTask);
+            }
+            
+            markDataChanged();
+            saveData();
+            renderFileContent();
+        }
+
+        function moveTaskUp(index, type) {
+            if (index === 0) return;
+            
+            const file = getFileById(studyData.currentFile);
+            if (!file) return;
+            
+            const tasks = type === 'todo' ? file.todos : file.done;
+            [tasks[index], tasks[index - 1]] = [tasks[index - 1], tasks[index]];
+            
+            markDataChanged();
+            saveData();
+            renderFileContent();
+        }
+
+        function moveTaskDown(index, type) {
+            const file = getFileById(studyData.currentFile);
+            if (!file) return;
+            
+            const tasks = type === 'todo' ? file.todos : file.done;
+            if (index === tasks.length - 1) return;
+            
+            [tasks[index], tasks[index + 1]] = [tasks[index + 1], tasks[index]];
+            
+            markDataChanged();
+            saveData();
+            renderFileContent();
+        }
+
+        function bulkDeleteTasks(type) {
+            const file = getFileById(studyData.currentFile);
+            if (!file) return;
+            
+            const taskType = type === 'todo' ? 'To-Do' : 'Completed';
+            if (confirm(`Delete all ${taskType} tasks? This cannot be undone.`)) {
+                if (type === 'todo') {
+                    file.todos = [];
+                } else {
+                    file.done = [];
+                }
+                markDataChanged();
+                saveData();
+                renderFileContent();
+            }
+        }
+
+        function bulkMoveTasks(fromType, toType) {
+            const file = getFileById(studyData.currentFile);
+            if (!file) return;
+            
+            const fromTasks = fromType === 'todo' ? file.todos : file.done;
+            const toTasks = toType === 'todo' ? file.todos : file.done;
+            
+            toTasks.push(...fromTasks);
+            
+            if (fromType === 'todo') {
+                file.todos = [];
+            } else {
+                file.done = [];
+            }
+            
+            markDataChanged();
+            saveData();
+            renderFileContent();
+        }
+
+        // Enhanced rendering functions
+        function renderFolders() {
+            const foldersList = document.getElementById('foldersList');
+            foldersList.innerHTML = '';
+
+            Object.keys(studyData.folders).forEach(folderId => {
+                const folder = studyData.folders[folderId];
+                
+                const folderDiv = document.createElement('div');
+                folderDiv.className = `folder-item ${folder.expanded ? 'expanded' : ''}`;
+                
+                const folderHeader = document.createElement('div');
+                folderHeader.className = 'folder-header';
+                folderHeader.onclick = () => toggleFolder(folderId);
+                folderHeader.innerHTML = `
+                    <span style="color: ${folder.color || '#3b82f6'}">${folder.name}</span>
+                    <div class="folder-controls">
+                        <button class="edit-folder-btn" onclick="editFolderName('${folderId}', event)" title="Edit subject">✎</button>
+                        <button class="duplicate-folder-btn" onclick="duplicateFolder('${folderId}', event)" title="Duplicate subject">📋</button>
+                        <button class="delete-folder-btn" onclick="deleteFolder('${folderId}', event)" title="Delete subject">×</button>
+                        <span class="folder-icon">▶</span>
+                    </div>
+                `;
+                
+                const filesList = document.createElement('div');
+                filesList.className = 'files-list';
+                
+                Object.keys(folder.files).forEach(fileId => {
+                    const file = folder.files[fileId];
+                    const fileDiv = document.createElement('div');
+                    fileDiv.className = `file-item ${studyData.currentFile === fileId ? 'active' : ''}`;
+                    fileDiv.onclick = () => selectFile(fileId);
+                    fileDiv.innerHTML = `
+                        <span title="Created: ${file.createdDate}, Modified: ${file.lastModified}">${file.name}</span>
+                        <div class="file-stats">${file.todos.length}/${file.todos.length + file.done.length}</div>
+                        <button class="delete-file-btn" onclick="deleteFile('${folderId}', '${fileId}', event)" title="Delete file">×</button>
+                    `;
+                    filesList.appendChild(fileDiv);
+                });
+                
+                const addFileBtn = document.createElement('button');
+                addFileBtn.className = 'add-file-btn';
+                addFileBtn.textContent = '+ Add File';
+                addFileBtn.onclick = () => addFile(folderId);
+                filesList.appendChild(addFileBtn);
+                
+                folderDiv.appendChild(folderHeader);
+                folderDiv.appendChild(filesList);
+                foldersList.appendChild(folderDiv);
+            });
+        }
+
+        function renderFileContent() {
+            if (!studyData.currentFile) {
+                showEmptyState();
+                return;
+            }
+
+            const file = getFileById(studyData.currentFile);
+            if (!file) {
+                showEmptyState();
+                return;
+            }
+
+            file.lastModified = getCurrentDateString();
+            document.getElementById('mainTitle').textContent = file.name;
+            document.getElementById('mainSubtitle').textContent = `Created: ${file.createdDate} | Modified: ${file.lastModified}`;
+
+            const contentArea = document.getElementById('contentArea');
+            contentArea.innerHTML = `
+                <div class="tasks-container">
+                    <div class="section">
+                        <div class="section-header">
+                            <span>📝 To-Do Tasks</span>
+                            <div class="section-controls">
+                                <span class="task-count">${file.todos.length} tasks</span>
+                                <button class="bulk-action-btn" onclick="bulkMoveTasks('todo', 'done')" title="Complete all">✓ All</button>
+                                <button class="bulk-action-btn danger" onclick="bulkDeleteTasks('todo')" title="Delete all">🗑 All</button>
+                            </div>
+                        </div>
+                        <div class="task-input-container">
+                            <textarea class="task-input" id="taskInput" placeholder="Add tasks... (paste multiple lines or numbered content like '01 Task name', '02 Another task', etc. - will auto-split into separate checkboxes)" rows="3"></textarea>
+                            <div class="input-controls">
+                                <button class="add-task-btn" onclick="addTask()">Add Tasks</button>
+                                <button class="clear-input-btn" onclick="clearTaskInput()">Clear</button>
+                            </div>
+                        </div>
+                        <div class="tasks-list" id="todoList">
+                            ${renderTasks(file.todos, 'todo')}
+                        </div>
+                    </div>
+
+                    <div class="section">
+                        <div class="section-header">
+                            <span>✅ Completed Tasks</span>
+                            <div class="section-controls">
+                                <span class="task-count">${file.done.length} completed</span>
+                                <button class="bulk-action-btn" onclick="bulkMoveTasks('done', 'todo')" title="Move all to todo">↶ All</button>
+                                <button class="bulk-action-btn danger" onclick="bulkDeleteTasks('done')" title="Delete all">🗑 All</button>
+                            </div>
+                        </div>
+                        <div class="tasks-list" id="doneList">
+                            ${renderTasks(file.done, 'done')}
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            document.getElementById('taskInput').addEventListener('keydown', function(e) {
+                if (e.key === 'Enter' && e.ctrlKey) {
+                    e.preventDefault();
+                    addTask();
+                }
+            });
+        }
+
+        function getFileById(fileId) {
+            for (let folderId in studyData.folders) {
+                const folder = studyData.folders[folderId];
+                if (folder.files[fileId]) {
+                    return folder.files[fileId];
+                }
+            }
+            return null;
+        }
+
+        function renderTasks(tasks, type) {
+            return tasks.map((task, index) => `
+                <div class="task-item" oncontextmenu="showContextMenu(event, '${type}', ${index})">
+                    <input type="checkbox" class="task-checkbox" ${type === 'done' ? 'checked' : ''} 
+                           onchange="toggleTask(${index}, '${type}')">
+                    <div class="task-content ${type === 'done' ? 'completed' : ''}" ondblclick="editTask(${index}, '${type}')" title="Double-click to edit">${linkifyText(task)}</div>
+                    <div class="task-controls">
+                        <button class="move-task-btn" onclick="moveTaskUp(${index}, '${type}')" title="Move up" ${index === 0 ? 'disabled' : ''}>↑</button>
+                        <button class="move-task-btn" onclick="moveTaskDown(${index}, '${type}')" title="Move down" ${index === tasks.length - 1 ? 'disabled' : ''}>↓</button>
+                        <button class="edit-task-btn" onclick="editTask(${index}, '${type}')" title="Edit task">✎</button>
+                        <button class="duplicate-task-btn" onclick="duplicateTask(${index}, '${type}')" title="Duplicate task">📋</button>
+                        <button class="delete-task-btn" onclick="deleteTask(${index}, '${type}')" title="Delete task">×</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function clearTaskInput() {
+            document.getElementById('taskInput').value = '';
+        }
+
+        function linkifyText(text) {
+            const urlRegex = /(https?:\/\/[^\s]+)/g;
+            return text.replace(urlRegex, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
+        }
+
+        function parseNumberedTasks(inputText) {
+            const tasks = [];
+            const lines = inputText.split('\n');
+            
+            for (let line of lines) {
+                line = line.trim();
+                if (!line) continue;
+                
+                const numberMatch = line.match(/^(\d{1,3})[\t\s\.\)\-\:\|]+(.+)$/);
+                
+                if (numberMatch) {
+                    const number = numberMatch[1];
+                    const content = numberMatch[2].trim();
+                    tasks.push(`Day ${number.padStart(2, '0')}: ${content}`);
+                } else {
+                    if (line.length > 200) {
+                        const parts = line.split(/[;,](?=\s*[A-Z])/);
+                        tasks.push(...parts.map(part => part.trim()).filter(part => part));
+                    } else {
+                        tasks.push(line);
+                    }
+                }
+            }
+            
+            return tasks;
+        }
+
+        function editTask(index, type) {
+            const file = getFileById(studyData.currentFile);
+            if (!file) return;
+            
+            const currentTask = type === 'todo' ? file.todos[index] : file.done[index];
+            const newTask = prompt('Edit task:', currentTask);
+            
+            if (newTask !== null && newTask.trim()) {
+                if (type === 'todo') {
+                    file.todos[index] = newTask.trim();
+                } else {
+                    file.done[index] = newTask.trim();
+                }
+                file.lastModified = getCurrentDateString();
+                markDataChanged();
+                saveData();
+                renderFileContent();
+            }
+        }
+
+        function addTask() {
+            const input = document.getElementById('taskInput');
+            const inputText = input.value.trim();
+            
+            if (!inputText) return;
+
+            const file = getFileById(studyData.currentFile);
+            if (file) {
+                const newTasks = parseNumberedTasks(inputText);
+                file.todos.push(...newTasks);
+                file.lastModified = getCurrentDateString();
+                
+                input.value = '';
+                markDataChanged();
+                saveData();
+                renderFileContent();
+                
+                if (newTasks.length > 1) {
+                    showSaveIndicator(`Added ${newTasks.length} tasks!`);
+                }
+            }
+        }
+
+        function toggleTask(index, currentType) {
+            const file = getFileById(studyData.currentFile);
+            if (!file) return;
+
+            if (currentType === 'todo') {
+                const task = file.todos.splice(index, 1)[0];
+                file.done.push(task);
+            } else {
+                const task = file.done.splice(index, 1)[0];
+                file.todos.push(task);
+            }
+
+            file.lastModified = getCurrentDateString();
+            markDataChanged();
+            saveData();
+            renderFileContent();
+        }
+
+        function deleteTask(index, type) {
+            if (confirm('Delete this task?')) {
+                const file = getFileById(studyData.currentFile);
+                if (!file) return;
+
+                if (type === 'todo') {
+                    file.todos.splice(index, 1);
+                } else {
+                    file.done.splice(index, 1);
+                }
+
+                file.lastModified = getCurrentDateString();
+                markDataChanged();
+                saveData();
+                renderFileContent();
+            }
+        }
+
+        // Enhanced completion system with consecutive day progression
+        function getTasksForDay(folderId, day) {
+            const folder = studyData.folders[folderId];
+            if (!folder || !folder.files) return [];
+            
+            let dayTasks = [];
+            Object.keys(folder.files).forEach(fileId => {
+                const file = folder.files[fileId];
+                const allTasks = [...file.todos, ...file.done];
+                
+                const dayPattern = new RegExp(`Day\\s*0*${day}\\s*:`, 'i');
+                const matchingTasks = allTasks.filter(task => dayPattern.test(task));
+                dayTasks.push(...matchingTasks);
+            });
+            
+            return dayTasks;
+        }
+
+        function getMaxDayForSubject(folderId) {
+            const folder = studyData.folders[folderId];
+            if (!folder || !folder.files) return 0;
+            
+            let maxDay = 0;
+            Object.keys(folder.files).forEach(fileId => {
+                const file = folder.files[fileId];
+                const allTasks = [...file.todos, ...file.done];
+                
+                allTasks.forEach(task => {
+                    const dayMatch = task.match(/Day\s*(\d+)/i);
+                    if (dayMatch) {
+                        maxDay = Math.max(maxDay, parseInt(dayMatch[1]));
+                    }
+                });
+            });
+            
+            return maxDay;
+        }
+
+        function calculateCompletionDate(folderId) {
+            const progress = studyData.subjectProgress[folderId];
+            if (!progress) return null;
+            
+            const maxDay = getMaxDayForSubject(folderId);
+            if (maxDay === 0) return null;
+            
+            const remainingDays = maxDay - progress.completedDays.length;
+            if (remainingDays <= 0) return 'Completed!';
+            
+            const completionDate = new Date();
+            completionDate.setDate(completionDate.getDate() + remainingDays);
+            
+            return completionDate.toLocaleDateString('en-US', { 
+                month: 'short', 
+                day: 'numeric',
+                year: completionDate.getFullYear() !== new Date().getFullYear() ? 'numeric' : undefined
+            });
+        }
+
+        function markSubjectDayCompleted(folderId, day) {
+            if (!studyData.subjectProgress[folderId]) {
+                studyData.subjectProgress[folderId] = {
+                    currentDay: 1,
+                    pendingDays: [],
+                    completedDays: [],
+                    lastCompletedDate: null
+                };
+            }
+            
+            const progress = studyData.subjectProgress[folderId];
+            const today = getCurrentDateString();
+            
+            if (!studyData.completedToday[today]) {
+                studyData.completedToday[today] = {};
+            }
+            if (!studyData.completedToday[today][folderId]) {
+                studyData.completedToday[today][folderId] = [];
+            }
+            
+            if (!progress.completedDays.includes(day)) {
+                progress.completedDays.push(day);
+                progress.completedDays.sort((a, b) => a - b);
+            }
+            
+            if (!studyData.completedToday[today][folderId].includes(day)) {
+                studyData.completedToday[today][folderId].push(day);
+            }
+            
+            progress.pendingDays = progress.pendingDays.filter(d => d !== day);
+            progress.lastCompletedDate = today;
+            
+            // Update current day to next sequential day
+            progress.currentDay = Math.max(...progress.completedDays) + 1;
+            
+            if (!studyData.dailyProgress[today]) {
+                studyData.dailyProgress[today] = {};
+            }
+            if (!studyData.dailyProgress[today][folderId]) {
+                studyData.dailyProgress[today][folderId] = [];
+            }
+            studyData.dailyProgress[today][folderId].push(`Day ${day} completed`);
+            
+            markDataChanged();
+            saveData();
+            renderHomepage();
+        }
+
+        function removeFromHome(folderId, day) {
+            const today = getCurrentDateString();
+            if (!studyData.removedFromHome[today]) {
+                studyData.removedFromHome[today] = {};
+            }
+            if (!studyData.removedFromHome[today][folderId]) {
+                studyData.removedFromHome[today][folderId] = [];
+            }
+            
+            if (!studyData.removedFromHome[today][folderId].includes(day)) {
+                studyData.removedFromHome[today][folderId].push(day);
+            }
+            
+            markDataChanged();
+            saveData();
+            renderHomepage();
+        }
+
+        function isRemovedFromHome(folderId, day) {
+            const today = getCurrentDateString();
+            return studyData.removedFromHome[today] && 
+                   studyData.removedFromHome[today][folderId] && 
+                   studyData.removedFromHome[today][folderId].includes(day);
+        }
+
+        function removeFromHistory(date, folderId) {
+            if (confirm('Remove this entry from history?')) {
+                if (studyData.dailyProgress[date] && studyData.dailyProgress[date][folderId]) {
+                    delete studyData.dailyProgress[date][folderId];
+                    
+                    if (Object.keys(studyData.dailyProgress[date]).length === 0) {
+                        delete studyData.dailyProgress[date];
+                    }
+                    
+                    markDataChanged();
+                    saveData();
+                    renderHistoryPage();
+                }
+            }
+        }
+
+        function updatePendingDays() {
+            const currentDay = getDaysSinceStart();
+            
+            Object.keys(studyData.folders).forEach(folderId => {
+                if (!studyData.subjectProgress[folderId]) {
+                    studyData.subjectProgress[folderId] = {
+                        currentDay: 1,
+                        pendingDays: [],
+                        completedDays: [],
+                        lastCompletedDate: null
+                    };
+                }
+                
+                const progress = studyData.subjectProgress[folderId];
+                
+                for (let day = 1; day < currentDay; day++) {
+                    if (!progress.completedDays.includes(day) && !progress.pendingDays.includes(day)) {
+                        progress.pendingDays.push(day);
+                    }
+                }
+                
+                progress.pendingDays.sort((a, b) => a - b);
+            });
+        }
+
+        function wasDayCompletedToday(folderId, day) {
+            const today = getCurrentDateString();
+            return studyData.completedToday[today] && 
+                   studyData.completedToday[today][folderId] && 
+                   studyData.completedToday[today][folderId].includes(day);
+        }
+
+        function getNextConsecutiveDays(folderId, completedDay, count = 3) {
+            const progress = studyData.subjectProgress[folderId];
+            const nextDays = [];
+            
+            for (let i = 1; i <= count; i++) {
+                const nextDay = completedDay + i;
+                if (!progress.completedDays.includes(nextDay)) {
+                    const tasks = getTasksForDay(folderId, nextDay);
+                    if (tasks.length > 0) {
+                        nextDays.push({
+                            day: nextDay,
+                            tasks: tasks.slice(0, 2),
+                            totalTasks: tasks.length
+                        });
+                    }
+                }
+            }
+            
+            return nextDays;
+        }
+
+        function renderHomepage() {
+            const today = getCurrentDateString();
+            const formattedDate = getFormattedDate(today);
+            const currentDay = getDaysSinceStart();
+            
+            updatePendingDays();
+            
+            const folderEntries = Object.entries(studyData.folders);
+            
+            let subjectCards = '';
+
+            if (folderEntries.length === 0) {
+                subjectCards = `
+                    <div class="day-card">
+                        <div class="day-card-header">
+                            <span class="day-card-title">No subjects yet</span>
+                        </div>
+                        <p style="color: #64748b; font-size: 14px; margin-top: 8px;">
+                            Go to the Planner tab to create subjects and add study materials.
+                        </p>
+                        <div class="homepage-actions">
+                            <button class="action-btn danger" onclick="clearAllData()">🗑 Clear All Data</button>
+                        </div>
+                    </div>
+                `;
+            } else {
+                folderEntries.forEach(([folderId, folder]) => {
+                    const progress = studyData.subjectProgress[folderId] || {
+                        currentDay: 1,
+                        pendingDays: [],
+                        completedDays: [],
+                        lastCompletedDate: null
+                    };
+                    
+                    const completionDate = calculateCompletionDate(folderId);
+                    const todaysDays = [...progress.pendingDays, progress.currentDay];
+                    const uniqueDays = [...new Set(todaysDays)].sort((a, b) => a - b)
+                        .filter(day => !isRemovedFromHome(folderId, day));
+                    
+                    let daysList = '';
+                    
+                    if (uniqueDays.length === 0) {
+                        daysList = '<div class="day-item">All caught up! 🎉</div>';
+                    } else {
+                        uniqueDays.forEach(day => {
+                            const tasks = getTasksForDay(folderId, day);
+                            const isPending = progress.pendingDays.includes(day);
+                            const isCompleted = progress.completedDays.includes(day);
+                            const wasCompletedToday = wasDayCompletedToday(folderId, day);
+                            const isCurrent = day === progress.currentDay;
+                            
+                            daysList += `
+                                <div class="day-item ${isPending ? 'pending' : ''} ${isCompleted ? 'completed' : ''} ${isCurrent ? 'current' : ''}">
+                                    <div class="day-info">
+                                        <span class="day-number">Day ${day}</span>
+                                        <div class="day-controls">
+                                            <span class="day-status">
+                                                ${isPending ? '(Pending)' : isCompleted ? '(Completed)' : isCurrent ? '(Current)' : '(Future)'}
+                                            </span>
+                                            <button class="remove-from-home-btn" onclick="removeFromHome('${folderId}', ${day})" title="Remove from homepage">×</button>
+                                        </div>
+                                    </div>
+                                    <div class="day-tasks-preview">
+                                        ${tasks.length > 0 ? tasks.slice(0, 2).map(task => 
+                                            `<div class="task-preview">${task.replace(/Day\s*\d+\s*:\s*/i, '')}</div>`
+                                        ).join('') : '<div class="task-preview">No tasks defined</div>'}
+                                        ${tasks.length > 2 ? `<div class="task-preview">+${tasks.length - 2} more...</div>` : ''}
+                                    </div>
+                                    ${!isCompleted ? `
+                                        <button class="complete-day-btn" onclick="markSubjectDayCompleted('${folderId}', ${day})">
+                                            ✓ Complete Day ${day}
+                                        </button>
+                                    ` : '<div class="completed-badge">✓ Done</div>'}
+                                    
+                                    ${wasCompletedToday ? `
+                                        <div class="consecutive-days-preview">
+                                            <div class="consecutive-header">🎯 Continue the streak!</div>
+                                            ${(() => {
+                                                const nextDays = getNextConsecutiveDays(folderId, day, 3);
+                                                return nextDays.map(nextDay => `
+                                                    <div class="next-day-option">
+                                                        <div class="next-day-info">
+                                                            <span class="next-day-title">Day ${nextDay.day}</span>
+                                                            <span class="next-day-task-count">${nextDay.totalTasks} tasks</span>
+                                                        </div>
+                                                        <div class="next-day-tasks">
+                                                            ${nextDay.tasks.map(task => 
+                                                                `<div class="task-preview">${task.replace(/Day\s*\d+\s*:\s*/i, '')}</div>`
+                                                            ).join('')}
+                                                            ${nextDay.totalTasks > 2 ? `<div class="task-preview">+${nextDay.totalTasks - 2} more...</div>` : ''}
+                                                        </div>
+                                                        <button class="complete-next-btn" onclick="markSubjectDayCompleted('${folderId}', ${nextDay.day})">
+                                                            ✓ Complete Day ${nextDay.day}
+                                                        </button>
+                                                    </div>
+                                                `).join('');
+                                            })()}
+                                        </div>
+                                    ` : ''}
+                                </div>
+                            `;
+                        });
+                    }
+                    
+                    const completedToday = progress.completedDays.filter(day => {
+                        return studyData.dailyProgress[today] && 
+                               studyData.dailyProgress[today][folderId] && 
+                               studyData.dailyProgress[today][folderId].some(entry => entry.includes(`Day ${day}`));
+                    }).length;
+
+                    const maxDay = getMaxDayForSubject(folderId);
+                    const totalCompleted = progress.completedDays.length;
+                    const progressPercentage = maxDay > 0 ? Math.round((totalCompleted / maxDay) * 100) : 0;
+
+                    subjectCards += `
+                        <div class="day-card">
+                            <div class="day-card-header">
+                                <span class="day-card-title" style="color: ${folder.color || '#3b82f6'}">${folder.name}</span>
+                                <div class="card-stats">
+                                    <span class="day-card-stats">
+                                        ${completedToday} completed today
+                                    </span>
+                                    <span class="progress-stats">
+                                        ${totalCompleted}/${maxDay} days (${progressPercentage}%)
+                                    </span>
+                                    ${completionDate && completionDate !== 'Completed!' ? `
+                                        <span class="completion-eta">ETA: ${completionDate}</span>
+                                    ` : completionDate === 'Completed!' ? `
+                                        <span class="completion-done">🎉 ${completionDate}</span>
+                                    ` : ''}
+                                </div>
+                            </div>
+                            <div class="days-list">
+                                ${daysList}
+                            </div>
+                        </div>
+                    `;
+                });
+
+                // Add global actions at the bottom
+                subjectCards += `
+                    <div class="day-card global-actions">
+                        <div class="day-card-header">
+                            <span class="day-card-title">Data Management</span>
+                        </div>
+                        <div class="homepage-actions">
+                            <button class="action-btn danger" onclick="clearAllData()">🗑 Clear All Data</button>
+                        </div>
+                    </div>
+                `;
+            }
+
+            document.getElementById('contentArea').innerHTML = `
+                <div class="homepage">
+                    <div class="date-header">
+                        <div class="current-date">${formattedDate}</div>
+                        <div class="date-subtitle">
+                            Study Day ${currentDay} • Started on ${getFormattedDate(studyData.startDate)}
+                        </div>
+                    </div>
+
+                    <div class="daily-progress-grid">
+                        ${subjectCards}
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderHistoryPage() {
+            const dates = Object.keys(studyData.dailyProgress).sort().reverse();
+            
+            let historyContent = '';
+            
+            if (dates.length === 0) {
+                historyContent = `
+                    <div class="history-empty">
+                        <p>No study history yet. Start completing your daily tasks to see your progress here!</p>
+                    </div>
+                `;
+            } else {
+                dates.forEach(date => {
+                    const formattedDate = getFormattedDate(date);
+                    const dayProgress = studyData.dailyProgress[date];
+                    
+                    let subjectsHtml = '';
+                    Object.entries(dayProgress).forEach(([folderId, activities]) => {
+                        const folderName = studyData.folders[folderId]?.name || 'Unknown Subject';
+                        const folderColor = studyData.folders[folderId]?.color || '#3b82f6';
+                        const activitiesList = activities.map(activity => 
+                            `<li class="history-activity">${activity}</li>`
+                        ).join('');
+                        
+                        subjectsHtml += `
+                            <div class="history-subject">
+                                <div class="history-subject-header">
+                                    <div class="history-subject-name" style="color: ${folderColor}">${folderName}</div>
+                                    <button class="remove-from-history-btn" onclick="removeFromHistory('${date}', '${folderId}')" title="Remove from history">×</button>
+                                </div>
+                                <ul class="history-activities">
+                                    ${activitiesList}
+                                </ul>
+                            </div>
+                        `;
+                    });
+                    
+                    historyContent += `
+                        <div class="history-date-section">
+                            <div class="history-date-header">
+                                <h3>${formattedDate}</h3>
+                            </div>
+                            <div class="history-subjects">
+                                ${subjectsHtml}
+                            </div>
+                        </div>
+                    `;
+                });
+            }
+            
+            document.getElementById('contentArea').innerHTML = `
+                <div class="history-page">
+                    ${historyContent}
+                </div>
+            `;
+        }
+
+        function showEmptyState() {
+            document.getElementById('mainTitle').textContent = 'Study Planner';
+            document.getElementById('mainSubtitle').textContent = 'Select a file to start planning your studies';
+            document.getElementById('headerControls').style.display = 'none';
+            document.getElementById('contentArea').innerHTML = `
+                <div class="empty-state">
+                    <p>Create a subject and add files to get started with your study planning!</p>
+                    <div class="empty-state-actions">
+                        <button class="action-btn" onclick="addFolder()">+ Create Subject</button>
+                    </div>
+                </div>
+            `;
+        }
+
+        function toggleMobileMenu() {
+            const sidebar = document.getElementById('sidebar');
+            sidebar.classList.toggle('mobile-open');
+        }
+
+        // Responsive design handler
+        function handleResize() {
+            const mobileToggle = document.getElementById('mobileMenuToggle');
+            if (window.innerWidth <= 768) {
+                mobileToggle.style.display = 'block';
+            } else {
+                mobileToggle.style.display = 'none';
+                document.getElementById('sidebar').classList.remove('mobile-open');
+            }
+        }
+
+        // Enhanced keyboard shortcuts
+        document.addEventListener('keydown', function(e) {
+            if (e.ctrlKey && e.key === 's') {
+                e.preventDefault();
+                saveData();
+            }
+            
+            if (e.key === 'Escape') {
+                document.getElementById('sidebar').classList.remove('mobile-open');
+                hideContextMenu();
+            }
+        });
+
+        // Click outside to close mobile menu and context menu
+        document.addEventListener('click', function(e) {
+            const sidebar = document.getElementById('sidebar');
+            const mobileToggle = document.getElementById('mobileMenuToggle');
+            const contextMenu = document.getElementById('contextMenu');
+            
+            if (window.innerWidth <= 768 && 
+                sidebar.classList.contains('mobile-open') &&
+                !sidebar.contains(e.target) && 
+                !mobileToggle.contains(e.target)) {
+                sidebar.classList.remove('mobile-open');
+            }
+            
+            if (!contextMenu.contains(e.target)) {
+                hideContextMenu();
+            }
+        });
+
+        // Initialize app
+        document.addEventListener('DOMContentLoaded', function() {
+            loadData();
+            startAutoSave();
+            showHome();
+            handleResize();
+            window.addEventListener('resize', handleResize);
+        });
+
+        // Handle window beforeunload to save data
+        window.addEventListener('beforeunload', function() {
+            if (isDataChanged) {
+                saveData();
+            }
+        });
+    </script>
+</body>
+</html>
