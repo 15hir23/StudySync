@@ -207,10 +207,14 @@
             }, studyData.settings.autoSaveInterval);
         }
 
-        function getCurrentDateString() {
-            const today = new Date();
-            return today.toISOString().split('T')[0];
-        }
+      function getCurrentDateString() {
+    const today = new Date();
+    const year = today.getFullYear();
+    const month = String(today.getMonth() + 1).padStart(2, '0');
+    const day = String(today.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
+
 
         function getFormattedDate(dateString) {
             const date = new Date(dateString + 'T00:00:00');
