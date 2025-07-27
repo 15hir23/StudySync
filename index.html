@@ -63,6 +63,7 @@
             subjectProgress: {},
             completedToday: {},
             removedFromHome: {},
+            showCompletedOnHome: {},
             settings: {
                 autoSaveInterval: 5000,
                 theme: 'light',
@@ -89,6 +90,7 @@
                         subjectProgress: parsedData.subjectProgress || {},
                         completedToday: parsedData.completedToday || {},
                         removedFromHome: parsedData.removedFromHome || {},
+                        showCompletedOnHome: parsedData.showCompletedOnHome || {},
                         settings: {
                             autoSaveInterval: 5000,
                             theme: 'light',
@@ -117,6 +119,9 @@
                     if (!studyData.removedFromHome[today]) {
                         studyData.removedFromHome[today] = {};
                     }
+                    if (!studyData.showCompletedOnHome[today]) {
+                        studyData.showCompletedOnHome[today] = {};
+                    }
                 } else {
                     // Initialize new data
                     initializeNewData();
@@ -129,15 +134,17 @@
         }
 
         function initializeNewData() {
+            const today = getCurrentDateString();
             studyData = {
                 folders: {},
                 currentFile: null,
                 dailyProgress: {},
                 currentView: 'home',
-                startDate: getCurrentDateString(),
+                startDate: today,
                 subjectProgress: {},
-                completedToday: { [getCurrentDateString()]: {} },
-                removedFromHome: { [getCurrentDateString()]: {} },
+                completedToday: { [today]: {} },
+                removedFromHome: { [today]: {} },
+                showCompletedOnHome: { [today]: {} },
                 settings: {
                     autoSaveInterval: 5000,
                     theme: 'light',
@@ -206,7 +213,7 @@
         }
 
         function getFormattedDate(dateString) {
-            const date = new Date(dateString);
+            const date = new Date(dateString + 'T00:00:00');
             return date.toLocaleDateString('en-US', { 
                 weekday: 'long', 
                 year: 'numeric', 
@@ -216,10 +223,10 @@
         }
 
         function getDaysSinceStart() {
-            const start = new Date(studyData.startDate);
-            const today = new Date(getCurrentDateString());
+            const start = new Date(studyData.startDate + 'T00:00:00');
+            const today = new Date(getCurrentDateString() + 'T00:00:00');
             const diffTime = today - start;
-            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+            const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
             return Math.max(1, diffDays + 1);
         }
 
@@ -621,7 +628,23 @@
                         <span class="folder-icon">▶</span>
                     </div>
                 `;
-                
+       
+
+        // Initialize app
+        document.addEventListener('DOMContentLoaded', function() {
+            loadData();
+            startAutoSave();
+            showHome();
+            handleResize();
+            window.addEventListener('resize', handleResize);
+        });
+
+        // Handle window beforeunload to save data
+        window.addEventListener('beforeunload', function() {
+            if (isDataChanged) {
+                saveData();
+            }
+        });    
                 const filesList = document.createElement('div');
                 filesList.className = 'files-list';
                 
@@ -735,7 +758,7 @@
                         <button class="move-task-btn" onclick="moveTaskDown(${index}, '${type}')" title="Move down" ${index === tasks.length - 1 ? 'disabled' : ''}>↓</button>
                         <button class="edit-task-btn" onclick="editTask(${index}, '${type}')" title="Edit task">✎</button>
                         <button class="duplicate-task-btn" onclick="duplicateTask(${index}, '${type}')" title="Duplicate task">📋</button>
-                        <button class="delete-task-btn" onclick="deleteTask(${index}, '${type}')" title="Delete task">×</button>
+                        <button class="delete-task-btn hover-delete" onclick="deleteTask(${index}, '${type}')" title="Delete task">×</button>
                     </div>
                 </div>
             `).join('');
@@ -824,12 +847,22 @@
             const file = getFileById(studyData.currentFile);
             if (!file) return;
 
+            const folderId = getFolderIdByFileId(studyData.currentFile);
+            let task;
+
             if (currentType === 'todo') {
-                const task = file.todos.splice(index, 1)[0];
+                task = file.todos.splice(index, 1)[0];
                 file.done.push(task);
             } else {
-                const task = file.done.splice(index, 1)[0];
+                task = file.done.splice(index, 1)[0];
                 file.todos.push(task);
+                
+                // If moving from done to todo, update subject progress
+                const dayMatch = task.match(/Day\s*(\d+)/i);
+                if (dayMatch && folderId) {
+                    const dayNum = parseInt(dayMatch[1]);
+                    undoSubjectDayCompletion(folderId, dayNum);
+                }
             }
 
             file.lastModified = getCurrentDateString();
@@ -927,6 +960,7 @@
             const progress = studyData.subjectProgress[folderId];
             const today = getCurrentDateString();
             
+            // Initialize today's data
             if (!studyData.completedToday[today]) {
                 studyData.completedToday[today] = {};
             }
@@ -934,6 +968,7 @@
                 studyData.completedToday[today][folderId] = [];
             }
             
+            // Mark day as completed
             if (!progress.completedDays.includes(day)) {
                 progress.completedDays.push(day);
                 progress.completedDays.sort((a, b) => a - b);
@@ -957,9 +992,98 @@
             }
             studyData.dailyProgress[today][folderId].push(`Day ${day} completed`);
             
+            // Update planner - mark day tasks as done
+            updatePlannerForCompletedDay(folderId, day);
+            
             markDataChanged();
             saveData();
             renderHomepage();
+        }
+
+        function undoSubjectDayCompletion(folderId, day) {
+            if (!studyData.subjectProgress[folderId]) return;
+            
+            const progress = studyData.subjectProgress[folderId];
+            const today = getCurrentDateString();
+            
+            // Remove from completed days
+            progress.completedDays = progress.completedDays.filter(d => d !== day);
+            
+            // Remove from today's completed
+            if (studyData.completedToday[today] && studyData.completedToday[today][folderId]) {
+                studyData.completedToday[today][folderId] = studyData.completedToday[today][folderId].filter(d => d !== day);
+            }
+            
+            // Add back to pending if it should be pending
+            const currentDay = getDaysSinceStart();
+            if (day < currentDay && !progress.pendingDays.includes(day)) {
+                progress.pendingDays.push(day);
+                progress.pendingDays.sort((a, b) => a - b);
+            }
+            
+            // Update current day
+            if (progress.completedDays.length > 0) {
+                progress.currentDay = Math.max(...progress.completedDays) + 1;
+            } else {
+                progress.currentDay = 1;
+            }
+            
+            // Remove from daily progress
+            if (studyData.dailyProgress[today] && studyData.dailyProgress[today][folderId]) {
+                studyData.dailyProgress[today][folderId] = studyData.dailyProgress[today][folderId]
+                    .filter(entry => !entry.includes(`Day ${day} completed`));
+                    
+                if (studyData.dailyProgress[today][folderId].length === 0) {
+                    delete studyData.dailyProgress[today][folderId];
+                }
+            }
+            
+            // Update planner - mark day tasks as todo
+            updatePlannerForUndoDay(folderId, day);
+            
+            markDataChanged();
+            saveData();
+            
+            // Refresh current view
+            if (studyData.currentView === 'home') {
+                renderHomepage();
+            }
+        }
+
+        function updatePlannerForCompletedDay(folderId, day) {
+            const folder = studyData.folders[folderId];
+            if (!folder || !folder.files) return;
+            
+            Object.keys(folder.files).forEach(fileId => {
+                const file = folder.files[fileId];
+                const dayPattern = new RegExp(`Day\\s*0*${day}\\s*:`, 'i');
+                
+                // Move matching todo tasks to done
+                for (let i = file.todos.length - 1; i >= 0; i--) {
+                    if (dayPattern.test(file.todos[i])) {
+                        const task = file.todos.splice(i, 1)[0];
+                        file.done.push(task);
+                    }
+                }
+            });
+        }
+
+        function updatePlannerForUndoDay(folderId, day) {
+            const folder = studyData.folders[folderId];
+            if (!folder || !folder.files) return;
+            
+            Object.keys(folder.files).forEach(fileId => {
+                const file = folder.files[fileId];
+                const dayPattern = new RegExp(`Day\\s*0*${day}\\s*:`, 'i');
+                
+                // Move matching done tasks back to todo
+                for (let i = file.done.length - 1; i >= 0; i--) {
+                    if (dayPattern.test(file.done[i])) {
+                        const task = file.done.splice(i, 1)[0];
+                        file.todos.push(task);
+                    }
+                }
+            });
         }
 
         function removeFromHome(folderId, day) {
@@ -985,6 +1109,24 @@
             return studyData.removedFromHome[today] && 
                    studyData.removedFromHome[today][folderId] && 
                    studyData.removedFromHome[today][folderId].includes(day);
+        }
+
+        function toggleShowCompletedOnHome(folderId) {
+            const today = getCurrentDateString();
+            if (!studyData.showCompletedOnHome[today]) {
+                studyData.showCompletedOnHome[today] = {};
+            }
+            
+            studyData.showCompletedOnHome[today][folderId] = !studyData.showCompletedOnHome[today][folderId];
+            
+            markDataChanged();
+            saveData();
+            renderHomepage();
+        }
+
+        function shouldShowCompletedOnHome(folderId) {
+            const today = getCurrentDateString();
+            return studyData.showCompletedOnHome[today] && studyData.showCompletedOnHome[today][folderId];
         }
 
         function removeFromHistory(date, folderId) {
@@ -1091,13 +1233,25 @@
                     };
                     
                     const completionDate = calculateCompletionDate(folderId);
-                    const todaysDays = [...progress.pendingDays, progress.currentDay];
-                    const uniqueDays = [...new Set(todaysDays)].sort((a, b) => a - b)
+                    const showCompleted = shouldShowCompletedOnHome(folderId);
+                    
+                    // Get days to show on homepage
+                    let daysToShow = [...progress.pendingDays, progress.currentDay];
+                    
+                    // Add completed days that were completed today if show completed is enabled
+                    if (showCompleted) {
+                        const completedToday = progress.completedDays.filter(day => 
+                            wasDayCompletedToday(folderId, day)
+                        );
+                        daysToShow.push(...completedToday);
+                    }
+                    
+                    const uniqueDays = [...new Set(daysToShow)].sort((a, b) => a - b)
                         .filter(day => !isRemovedFromHome(folderId, day));
                     
                     let daysList = '';
                     
-                    if (uniqueDays.length === 0) {
+                    if (uniqueDays.length === 0 && !showCompleted) {
                         daysList = '<div class="day-item">All caught up! 🎉</div>';
                     } else {
                         uniqueDays.forEach(day => {
@@ -1115,7 +1269,7 @@
                                             <span class="day-status">
                                                 ${isPending ? '(Pending)' : isCompleted ? '(Completed)' : isCurrent ? '(Current)' : '(Future)'}
                                             </span>
-                                            <button class="remove-from-home-btn" onclick="removeFromHome('${folderId}', ${day})" title="Remove from homepage">×</button>
+                                            <button class="remove-from-home-btn hover-delete" onclick="removeFromHome('${folderId}', ${day})" title="Remove from homepage">×</button>
                                         </div>
                                     </div>
                                     <div class="day-tasks-preview">
@@ -1128,9 +1282,14 @@
                                         <button class="complete-day-btn" onclick="markSubjectDayCompleted('${folderId}', ${day})">
                                             ✓ Complete Day ${day}
                                         </button>
-                                    ` : '<div class="completed-badge">✓ Done</div>'}
+                                    ` : `
+                                        <div class="completed-controls">
+                                            <div class="completed-badge">✓ Done</div>
+                                            <button class="undo-day-btn" onclick="undoSubjectDayCompletion('${folderId}', ${day})" title="Mark as not done">↶ Undo</button>
+                                        </div>
+                                    `}
                                     
-                                    ${wasCompletedToday ? `
+                                    ${wasCompletedToday && !isCompleted ? `
                                         <div class="consecutive-days-preview">
                                             <div class="consecutive-header">🎯 Continue the streak!</div>
                                             ${(() => {
@@ -1186,6 +1345,11 @@
                                     ` : completionDate === 'Completed!' ? `
                                         <span class="completion-done">🎉 ${completionDate}</span>
                                     ` : ''}
+                                </div>
+                                <div class="card-controls">
+                                    <button class="toggle-completed-btn" onclick="toggleShowCompletedOnHome('${folderId}')" title="${showCompleted ? 'Hide' : 'Show'} completed tasks">
+                                        ${showCompleted ? '👁 Hide Done' : '👁 Show Done'}
+                                    </button>
                                 </div>
                             </div>
                             <div class="days-list">
@@ -1252,7 +1416,7 @@
                             <div class="history-subject">
                                 <div class="history-subject-header">
                                     <div class="history-subject-name" style="color: ${folderColor}">${folderName}</div>
-                                    <button class="remove-from-history-btn" onclick="removeFromHistory('${date}', '${folderId}')" title="Remove from history">×</button>
+                                    <button class="remove-from-history-btn hover-delete" onclick="removeFromHistory('${date}', '${folderId}')" title="Remove from history">×</button>
                                 </div>
                                 <ul class="history-activities">
                                     ${activitiesList}
@@ -1341,6 +1505,51 @@
                 hideContextMenu();
             }
         });
+     // Add CSS for hover effects
+        const style = document.createElement('style');
+        style.textContent = `
+            .hover-delete {
+                opacity: 0.3;
+                transition: opacity 0.2s ease;
+            }
+            .hover-delete:hover {
+                opacity: 1;
+                color: #dc2626;
+            }
+            .completed-controls {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+            }
+            .undo-day-btn {
+                padding: 4px 8px;
+                background: #f59e0b;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                font-size: 12px;
+                cursor: pointer;
+            }
+            .undo-day-btn:hover {
+                background: #d97706;
+            }
+            .toggle-completed-btn {
+                padding: 4px 8px;
+                background: #6b7280;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                font-size: 12px;
+                cursor: pointer;
+            }
+            .toggle-completed-btn:hover {
+                background: #4b5563;
+            }
+            .card-controls {
+                margin-top: 8px;
+            }
+        `;
+        document.head.appendChild(style);
 
         // Initialize app
         document.addEventListener('DOMContentLoaded', function() {
@@ -1359,4 +1568,4 @@
         });
     </script>
 </body>
-</html>
+</html> 
